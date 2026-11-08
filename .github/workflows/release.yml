@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'jointcraft/**'
+      - 'tests/**'
       - '.github/workflows/release.yml'
   workflow_dispatch:
 
@@ -30,6 +31,12 @@ jobs:
           curl -fL --retry 3 -o blender.tar.xz https://download.blender.org/release/Blender5.2/blender-5.2.0-linux-x64.tar.xz
           mkdir -p blender-bin
           tar -xf blender.tar.xz -C blender-bin --strip-components=1
+      - name: Test pin and socket in Blender 5.2
+        run: |
+          ./blender-bin/blender --background --factory-startup --python-exit-code 1 --python tests/blender_integration.py
+      - name: Validate extension manifest
+        run: |
+          ./blender-bin/blender --background --factory-startup --command extension validate jointcraft
       - name: Build extension package
         run: |
           mkdir -p public

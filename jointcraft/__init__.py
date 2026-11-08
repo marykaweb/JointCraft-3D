@@ -1,7 +1,7 @@
 bl_info = {
     "name": "JointCraft 3D",
     "author": "JointCraft 3D",
-    "version": (0, 2, 0),
+    "version": (0, 2, 1),
     "blender": (5, 2, 0),
     "location": "View3D > Sidebar > JointCraft",
     "description": "Automatically place a fixed cylindrical pin and socket between touching meshes",
@@ -12,6 +12,7 @@ import bpy
 import math
 from mathutils import Vector
 from bpy.props import PointerProperty, FloatProperty, BoolProperty
+from .geometry import interface_from_bounds
 
 
 def mm_to_bu(context, mm):
@@ -26,25 +27,31 @@ def bounds_world(obj):
 
 
 def find_interface(context, pin, socket, tolerance):
-    pmin, pmax = bounds_world(pin)
-    smin, smax = bounds_world(socket)
-    choices = []
-    for axis in range(3):
-        others = [i for i in range(3) if i != axis]
-        overlaps = [(max(pmin[i], smin[i]), min(pmax[i], smax[i])) for i in others]
-        if any(hi - lo <= tolerance for lo, hi in overlaps):
-            continue
-        for sign, face_pin, face_socket in ((1, pmax[axis], smin[axis]),
-                                            (-1, pmin[axis], smax[axis])):
-            gap = face_socket - face_pin if sign == 1 else face_pin - face_socket
-            if abs(gap) <= tolerance:
-                area = math.prod(hi - lo for lo, hi in overlaps)
-                choices.append((abs(gap), -area, axis, sign, face_pin, overlaps,
-                                pmin, pmax, smin, smax))
-    if not choices:
-        raise ValueError("No touching axis-aligned faces found. Move meshes so their faces meet.")
-    choices.sort(key=lambda v: (v[0], v[1]))
-    return choices[0]
+    for obj in (pin, socket):
+        if obj is None or obj.type != 'MESH':
+            raise ValueError("Choose two different mesh objects")
+        if context.scene.objects.get(obj.name) != obj:
+            raise ValueError("Object '%s' is not in the active scene" % obj.name)
+        if context.view_layer.objects.get(obj.name) != obj:
+            raise ValueError("Object '%s' is not in the active view layer" % obj.name)
+        if not obj.data.vertices:
+            raise ValueError("Object '%s' has no mesh vertices" % obj.name)
+    if pin == socket:
+        raise ValueError("Pin and socket must be different objects")
+    # RNA location/scale writes can leave matrix_world stale until evaluation.
+    context.view_layer.update()
+    depsgraph = context.evaluated_depsgraph_get()
+    pmin, pmax = bounds_world(pin.evaluated_get(depsgraph))
+    smin, smax = bounds_world(socket.evaluated_get(depsgraph))
+    try:
+        return interface_from_bounds(pmin, pmax, smin, smax, tolerance)
+    except ValueError as exc:
+        details = ("Pin '%s': %s .. %s; Socket '%s': %s .. %s; "
+                   "requested tolerance %.6g BU (%.4g mm). "
+                   "Check assigned objects and world-axis-aligned face contact." %
+                   (pin.name, pmin, pmax, socket.name, smin, smax, tolerance,
+                    tolerance / mm_to_bu(context, 1.0)))
+        raise ValueError("%s. %s" % (exc, details)) from exc
 
 
 def cylinder_mesh(name, origin, axis, sign, start, end, radius, segments=48):
@@ -62,6 +69,9 @@ def cylinder_mesh(name, origin, axis, sign, start, end, radius, segments=48):
     for j in range(segments):
         k = (j + 1) % segments
         faces.append((j, k, segments + k, segments + j))
+    # Swapping X/Z for a Y cylinder or reversing the axis flips handedness.
+    if sign * (-1 if axis == 1 else 1) < 0:
+        faces = [tuple(reversed(face)) for face in faces]
     mesh = bpy.data.meshes.new(name)
     mesh.from_pydata(vertices, [], faces)
     mesh.update()
@@ -78,14 +88,47 @@ def boolean_mesh(context, target, cutter, operation):
         evaluated = target.evaluated_get(depsgraph)
         new_mesh = bpy.data.meshes.new_from_object(evaluated, preserve_all_data_layers=True,
                                                    depsgraph=depsgraph)
-        if new_mesh is None:
+        if new_mesh is None or not new_mesh.vertices or not new_mesh.polygons:
+            if new_mesh is not None:
+                bpy.data.meshes.remove(new_mesh)
             raise RuntimeError("Boolean evaluation failed")
     finally:
         target.modifiers.remove(modifier)
-    old = target.data
-    target.data = new_mesh
-    if old.users == 0:
-        bpy.data.meshes.remove(old)
+    return new_mesh
+
+
+def apply_joint(context, pin, socket, center, axis, sign, embed, length, radius,
+                clearance, tolerance):
+    """Prepare both Boolean results before replacing either source mesh."""
+    cutters, temporary_meshes, results = [], [], []
+    originals = (pin.data, socket.data)
+    try:
+        for name, start, end, r in (
+                ('JC_Pin_Temp', -embed, length, radius),
+                ('JC_Socket_Temp', -max(tolerance, clearance * 0.15),
+                 length + clearance, radius + clearance)):
+            mesh = cylinder_mesh(name, center, axis, sign, start, end, r)
+            temporary_meshes.append(mesh)
+            cutter = bpy.data.objects.new(name, mesh)
+            cutters.append(cutter)
+            context.scene.collection.objects.link(cutter)
+        results.append(boolean_mesh(context, pin, cutters[0], 'UNION'))
+        results.append(boolean_mesh(context, socket, cutters[1], 'DIFFERENCE'))
+        try:
+            pin.data, socket.data = results
+        except Exception:
+            pin.data, socket.data = originals
+            raise
+    finally:
+        for cutter in cutters:
+            bpy.data.objects.remove(cutter, do_unlink=True)
+        for mesh in temporary_meshes + results:
+            if mesh.users == 0:
+                bpy.data.meshes.remove(mesh)
+    # Keep shared source datablocks, and delete only unused originals on success.
+    for mesh in set(originals):
+        if mesh.users == 0:
+            bpy.data.meshes.remove(mesh)
 
 
 class JOINTCRAFT_OT_create(bpy.types.Operator):
@@ -103,11 +146,17 @@ class JOINTCRAFT_OT_create(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         pin, socket = scene.jc_pin, scene.jc_socket
+        if pin is None or socket is None or pin == socket:
+            self.report({'ERROR'}, "Choose two different mesh objects")
+            return {'CANCELLED'}
         if pin.type != 'MESH' or socket.type != 'MESH':
             self.report({'ERROR'}, "Both objects must be meshes")
             return {'CANCELLED'}
         if pin.library or socket.library or pin.data.library or socket.data.library:
             self.report({'ERROR'}, "Linked meshes cannot be edited")
+            return {'CANCELLED'}
+        if any(obj.modifiers or obj.data.shape_keys for obj in (pin, socket)):
+            self.report({'ERROR'}, "Apply modifiers and resolve shape keys before creating a joint")
             return {'CANCELLED'}
         if any(abs(v) < 1e-9 for v in pin.scale) or any(abs(v) < 1e-9 for v in socket.scale):
             self.report({'ERROR'}, "Object scale must not be zero")
@@ -132,23 +181,8 @@ class JOINTCRAFT_OT_create(bpy.types.Operator):
             center[axis] = face
             for index, (lo, hi) in zip([i for i in range(3) if i != axis], overlaps):
                 center[index] = (lo + hi) * 0.5
-            # World-space cutter; target object transforms remain unchanged.
-            pin_mesh = cylinder_mesh("JC_Pin_Temp", center, axis, sign, -embed, length, radius)
-            socket_mesh = cylinder_mesh("JC_Socket_Temp", center, axis, sign,
-                                        -max(tol, clearance * 0.15),
-                                        length + clearance, radius + clearance)
-            pin_cutter = bpy.data.objects.new("JC_Pin_Temp", pin_mesh)
-            socket_cutter = bpy.data.objects.new("JC_Socket_Temp", socket_mesh)
-            context.collection.objects.link(pin_cutter)
-            context.collection.objects.link(socket_cutter)
-            try:
-                # Boolean works in world coordinates via cutter object matrix.
-                # If target is transformed, world-space cutters remain correct.
-                boolean_mesh(context, pin, pin_cutter, 'UNION')
-                boolean_mesh(context, socket, socket_cutter, 'DIFFERENCE')
-            finally:
-                bpy.data.objects.remove(pin_cutter, do_unlink=True)
-                bpy.data.objects.remove(socket_cutter, do_unlink=True)
+            apply_joint(context, pin, socket, center, axis, sign, embed, length,
+                        radius, clearance, tol)
             self.report({'INFO'}, "Joint created: diameter %.2f mm, length %.2f mm" %
                         (radius * 2 / mm_to_bu(context, 1), length / mm_to_bu(context, 1)))
             return {'FINISHED'}
@@ -158,7 +192,7 @@ class JOINTCRAFT_OT_create(bpy.types.Operator):
 
 
 class JOINTCRAFT_PT_main(bpy.types.Panel):
-    bl_label = "JointCraft 3D v0.2"
+    bl_label = "JointCraft 3D v0.2.1"
     bl_idname = "JOINTCRAFT_PT_main"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -185,11 +219,15 @@ class JOINTCRAFT_PT_main(bpy.types.Panel):
 classes = (JOINTCRAFT_OT_create, JOINTCRAFT_PT_main)
 
 
+def mesh_in_scene(scene, obj):
+    return obj.type == 'MESH' and scene.objects.get(obj.name) == obj
+
+
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.jc_pin = PointerProperty(name="Pin object", type=bpy.types.Object)
-    bpy.types.Scene.jc_socket = PointerProperty(name="Socket object", type=bpy.types.Object)
+    bpy.types.Scene.jc_pin = PointerProperty(name="Pin object", type=bpy.types.Object, poll=mesh_in_scene)
+    bpy.types.Scene.jc_socket = PointerProperty(name="Socket object", type=bpy.types.Object, poll=mesh_in_scene)
     bpy.types.Scene.jc_clearance_mm = FloatProperty(name="Radial clearance (mm)", default=0.20, min=0.0, max=2.0, precision=2)
     bpy.types.Scene.jc_wall_mm = FloatProperty(name="Minimum wall (mm)", default=1.2, min=0.1, max=20.0, precision=2)
     bpy.types.Scene.jc_tolerance_mm = FloatProperty(name="Face tolerance (mm)", default=0.05, min=0.001, max=2.0, precision=3)
