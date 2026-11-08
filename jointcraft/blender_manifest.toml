@@ -1,0 +1,10 @@
+schema_version = "1.0.0"
+id = "jointcraft_3d"
+version = "0.2.0"
+name = "JointCraft 3D"
+tagline = "Automatic fixed pin and socket for touching 3D-print parts"
+maintainer = "JointCraft 3D"
+type = "add-on"
+tags = ["3D View", "Modeling", "Mesh"]
+blender_version_min = "5.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
