@@ -1,4 +1,4 @@
-JointCraft 3D v0.2.1 — prototype, tested with Blender 5.2.0 LTS
+JointCraft 3D v0.2.2 — prototype, tested with Blender 5.2.0 LTS
 
 Install ZIP: Edit > Preferences > Get Extensions > menu > Install from Disk.
 Disable older separately installed JointCraft versions before installing.
@@ -7,8 +7,12 @@ Use:
 1. Create two closed mesh boxes (e.g. 20 x 20 x 20 mm) sharing a face.
 2. Object Mode > N panel > JointCraft.
 3. Assign the pin object and socket object.
-4. Click Create Auto Pin + Socket.
-5. Inspect mesh and test fit before printing.
+4. Enable Show live preview to see blue pin and orange socket x-ray guides.
+5. Disable Automatic dimensions to change Pin diameter / Pin length (mm).
+   Guides follow parameter and object changes without modifying source meshes.
+   Oversized joints are rejected with the maximum supported dimensions.
+6. Click Create Pin + Socket to commit. Preview switches off on success.
+7. Inspect mesh and test fit before printing.
 
 The algorithm refreshes the view layer and checks evaluated WORLD-AXIS-ALIGNED
 bounding-box face contact. Objects must belong to the active scene and view layer.
@@ -33,3 +37,9 @@ Successful operations modify both meshes. Ctrl+Z to undo.
 - Filter object pickers to scene meshes and reject off-scene/view-layer objects.
 - Correct cutter winding for -X, +Y and -Z.
 - Preserve both original meshes if the second Boolean fails.
+
+0.2.2 adds custom diameter and length, plus live GPU wireframe x-ray guides.
+Blue includes the embedded pin base; orange includes socket clearance.
+Guides are not a Boolean preview or a printability check. They do not appear in
+renders/exports, create no objects and can be hidden with Show live preview.
+Automatic sizing retains the 8 mm diameter / 6 mm length upper limits.

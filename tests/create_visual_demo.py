@@ -55,4 +55,4 @@ for name, obj, hidden, position in (
     scene.render.filepath = str(out / (name + '.png'))
     bpy.ops.render.render(write_still=True)
 pin.hide_render = socket.hide_render = False
-bpy.ops.wm.save_as_mainfile(filepath=str(out / 'jointcraft-0.2.1-demo.blend'))
+bpy.ops.wm.save_as_mainfile(filepath=str(out / 'jointcraft-0.2.2-demo.blend'))

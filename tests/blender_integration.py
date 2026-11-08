@@ -147,6 +147,45 @@ class BlenderTests(unittest.TestCase):
                 bm.free()
                 bpy.data.meshes.remove(mesh)
 
+    def test_manual_dimensions_and_preview_match_final_geometry(self):
+        from jointcraft.preview import preview_lines
+        pin, socket = self.cubes(size=.02)
+        self.scene.jc_auto_size = False
+        self.scene.jc_diameter_mm = 10
+        self.scene.jc_length_mm = 9
+        self.scene.jc_preview = True
+        originals = (pin.data, socket.data)
+        objects, meshes = set(bpy.data.objects), set(bpy.data.meshes)
+        params = jc.joint_parameters(bpy.context)
+        lines = preview_lines(params)
+        self.assertAlmostEqual(max(p[0] for p in lines[0]), .019)
+        self.assertAlmostEqual(max(p[1] for p in lines[0]), .005)
+        self.assertAlmostEqual(max(p[0] for p in lines[1]), .0192)
+        self.assertAlmostEqual(max(p[1] for p in lines[1]), .0052)
+        self.scene.jc_diameter_mm = 12
+        self.scene.jc_length_mm = 10
+        changed = preview_lines(jc.joint_parameters(bpy.context))
+        self.assertAlmostEqual(max(p[0] for p in changed[0]), .02)
+        self.assertAlmostEqual(max(p[1] for p in changed[0]), .006)
+        self.assertEqual((pin.data, socket.data), originals)
+        self.assertEqual(set(bpy.data.objects), objects)
+        self.assertEqual(set(bpy.data.meshes), meshes)
+        self.create(pin, socket, .006, .010)
+        self.assertFalse(self.scene.jc_preview)
+
+    def test_oversized_manual_joint_is_rejected_without_changes(self):
+        pin, socket = self.cubes(size=.02)
+        originals = (pin.data, socket.data)
+        self.scene.jc_auto_size = False
+        self.scene.jc_diameter_mm = 30
+        with self.assertRaisesRegex(RuntimeError, 'does not fit'):
+            bpy.ops.jointcraft.create_auto()
+        self.assertEqual((pin.data, socket.data), originals)
+        self.scene.jc_diameter_mm = 8
+        self.scene.jc_length_mm = 30
+        with self.assertRaisesRegex(ValueError, 'does not fit'):
+            jc.joint_parameters(bpy.context)
+
 
 jc.register()
 print('Testing Blender', bpy.app.version_string, flush=True)
