@@ -1,9 +1,11 @@
-JointCraft 3D v0.2.2 — prototype, tested with Blender 5.2.0 LTS
+JointCraft 3D v0.3.0 — prototype, tested with Blender 5.2.0 LTS
 
 Install ZIP: Edit > Preferences > Get Extensions > menu > Install from Disk.
 Disable older separately installed JointCraft versions before installing.
 
 Use:
+Select Joint Type: Fixed Pin + Socket or Articulated Hinge.
+The following numbered instructions describe Fixed Pin + Socket.
 1. Create two closed mesh boxes (e.g. 20 x 20 x 20 mm) sharing a face.
 2. Object Mode > N panel > JointCraft.
 3. Assign the pin object and socket object.
@@ -43,3 +45,37 @@ Blue includes the embedded pin base; orange includes socket clearance.
 Guides are not a Boolean preview or a printability check. They do not appear in
 renders/exports, create no objects and can be hidden with Show live preview.
 Automatic sizing retains the 8 mm diameter / 6 mm length upper limits.
+
+0.3.0: ARTICULATED HINGE
+Choose Part A (two outer knuckles), Part B (middle knuckle), world axis X/Y/Z,
+center coordinates or a scene Empty. Use 3D Cursor copies cursor coordinates.
+Attachment direction 0 deg is +X for Z/Y axes, +Y for X axis.
+Part A must be on the negative side, Part B on the positive side.
+All dimensions are mm; center coordinates use scene length display units.
+
+Defaults: pin 3 mm, radial clearance .25 mm, each axial gap .30 mm,
+total hinge height 8 mm, wall 1.2 mm, swing each way 30 degrees.
+Advanced: outer diameter, middle knuckle width, pin shaft length (0 = automatic).
+Height includes all three knuckles and both axial gaps; head is additional.
+At the defaults outer diameter is 5.9 mm. Each knuckle must be at least wall thick.
+
+Preview: blue Part A, orange Part B, green pin; dashed lines show bevel boundaries.
+The operator TRIMS mating faces with wedge/cylinder cuts to make room for motion,
+then adds support bridges and knuckles. Larger swing angles remove more material.
+Preview is a construction guide, not a full Boolean result.
+Only selected parts are collision-tested at 5-degree samples and range endpoints;
+this is not continuous collision analysis, a strength check or a print guarantee.
+Closed connected manifold source/result meshes are required. Modifiers, shape
+keys, linked meshes and overrides are rejected. Shared local meshes are preserved.
+All results are prepared before commit; any build/commit error restores sources.
+Ctrl+Z undoes the operation. Existing fixed connector functionality is retained.
+
+Print A, B and headed pin SEPARATELY. Check supports beneath A's upper knuckle.
+Clean holes, align parts, insert pin from the head side. Test rotation before
+fixing. Secure exposed tip to PART A ONLY (for example with suitable adhesive).
+Keep adhesive away from Part B and moving gaps. Head alone is not a two-way lock.
+No snap-fit, print-in-place, automatic placement or interactive rotation tool yet.
+
+Example: two 20 x 20 x 8 mm blocks centered at (-.01,0,0) and (.01,0,0) BU with
+Unit Scale 1. Center (0,0,0), axis Z, direction 0 deg, remaining values default.
+Detailed guide: https://github.com/marykaweb/JointCraft-3D/blob/main/docs/HINGE.md

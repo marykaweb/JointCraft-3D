@@ -1,29 +1,18 @@
 bl_info = {
     "name": "JointCraft 3D",
     "author": "JointCraft 3D",
-    "version": (0, 2, 2),
+    "version": (0, 3, 0),
     "blender": (5, 2, 0),
     "location": "View3D > Sidebar > JointCraft",
-    "description": "Automatically place a fixed cylindrical pin and socket between touching meshes",
+    "description": "Create fixed pin/socket connectors and articulated three-knuckle hinges",
     "category": "3D View",
 }
 
 import bpy
 import math
-from mathutils import Vector
 from bpy.props import PointerProperty, FloatProperty, BoolProperty
 from .geometry import interface_from_bounds
-
-
-def mm_to_bu(context, mm):
-    scale = context.scene.unit_settings.scale_length or 1.0
-    return mm * 0.001 / scale
-
-
-def bounds_world(obj):
-    points = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
-    return ([min(p[i] for p in points) for i in range(3)],
-            [max(p[i] for p in points) for i in range(3)])
+from .utils import mm_to_bu, bounds_world, boolean_mesh, mesh_in_scene
 
 
 def find_interface(context, pin, socket, tolerance, refresh=True):
@@ -77,25 +66,6 @@ def cylinder_mesh(name, origin, axis, sign, start, end, radius, segments=48):
     mesh.from_pydata(vertices, [], faces)
     mesh.update()
     return mesh
-
-
-def boolean_mesh(context, target, cutter, operation):
-    modifier = target.modifiers.new("JC temporary " + operation, 'BOOLEAN')
-    modifier.operation = operation
-    modifier.solver = 'EXACT'
-    modifier.object = cutter
-    try:
-        depsgraph = context.evaluated_depsgraph_get()
-        evaluated = target.evaluated_get(depsgraph)
-        new_mesh = bpy.data.meshes.new_from_object(evaluated, preserve_all_data_layers=True,
-                                                   depsgraph=depsgraph)
-        if new_mesh is None or not new_mesh.vertices or not new_mesh.polygons:
-            if new_mesh is not None:
-                bpy.data.meshes.remove(new_mesh)
-            raise RuntimeError("Boolean evaluation failed")
-    finally:
-        target.modifiers.remove(modifier)
-    return new_mesh
 
 
 def apply_joint(context, pin, socket, center, axis, sign, embed, length, radius,
@@ -208,7 +178,7 @@ class JOINTCRAFT_OT_create(bpy.types.Operator):
 
 
 class JOINTCRAFT_PT_main(bpy.types.Panel):
-    bl_label = "JointCraft 3D v0.2.2"
+    bl_label = "JointCraft 3D v0.3.0"
     bl_idname = "JOINTCRAFT_PT_main"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -217,6 +187,11 @@ class JOINTCRAFT_PT_main(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
+        layout.prop(scene, 'jc_joint_type')
+        if scene.jc_joint_type == 'HINGE':
+            from . import hinges
+            hinges.draw_panel(layout, context)
+            return
         layout.label(text="Auto: touching flat faces")
         layout.prop(scene, "jc_pin", text="Pin object")
         layout.prop(scene, "jc_socket", text="Socket object")
@@ -259,10 +234,6 @@ class JOINTCRAFT_PT_main(bpy.types.Panel):
 classes = (JOINTCRAFT_OT_create, JOINTCRAFT_PT_main)
 
 
-def mesh_in_scene(scene, obj):
-    return obj.type == 'MESH' and scene.objects.get(obj.name) == obj
-
-
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
@@ -278,12 +249,16 @@ def register():
     bpy.types.Scene.jc_wall_mm = FloatProperty(name="Minimum wall (mm)", default=1.2, min=0.1, max=20.0, precision=2, update=redraw)
     bpy.types.Scene.jc_tolerance_mm = FloatProperty(name="Face tolerance (mm)", default=0.05, min=0.001, max=2.0, precision=3, update=redraw)
     bpy.types.Scene.jc_show_advanced = BoolProperty(name="Advanced", default=False)
-    preview.register()
+    from . import hinges
+    hinges.register(redraw, mesh_in_scene)
+    preview.register(joint_parameters)
 
 
 def unregister():
     from . import preview
     preview.unregister()
+    from . import hinges
+    hinges.unregister()
     for name in ("jc_pin", "jc_socket", "jc_clearance_mm", "jc_wall_mm", "jc_tolerance_mm", "jc_show_advanced",
                  "jc_auto_size", "jc_diameter_mm", "jc_length_mm", "jc_preview"):
         delattr(bpy.types.Scene, name)

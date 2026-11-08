@@ -34,7 +34,10 @@ jobs:
       - name: Test pin and socket in Blender 5.2
         run: |
           ./blender-bin/blender --background --factory-startup --python-exit-code 1 --python tests/blender_integration.py
-      - name: Validate extension manifest
+      - name: Test articulated hinge in Blender 5.2
+        run: |
+          ./blender-bin/blender --background --factory-startup --python-exit-code 1 --python tests/hinge_integration.py
+      - name: Validate extension package
         run: |
           ./blender-bin/blender --background --factory-startup --command extension validate jointcraft
       - name: Build extension package

@@ -3,6 +3,7 @@ import math
 import bpy
 
 _handle = None
+_fixed_parameters = None
 
 
 def tag_redraw(_scene=None, context=None):
@@ -46,21 +47,72 @@ def preview_lines(params):
     return pin, socket
 
 
+def hinge_lines(p):
+    from . import hinge_geometry as geo
+    groups = [[], [], []]
+
+    def add(surface, group, circular=False):
+        vertices, faces = geo.world_surface(surface, p['center'], p['u'], p['v'], p['w'])
+        edges = set()
+        for face in faces:
+            for j, first in enumerate(face):
+                second = face[(j + 1) % len(face)]
+                if circular and abs(first - second) == 64 and first % 16:
+                    continue
+                edges.add(tuple(sorted((first, second))))
+        for a, b in sorted(edges):
+            groups[group].extend((vertices[a], vertices[b]))
+
+    for i, (start, end) in enumerate(p['intervals']):
+        group = 1 if i == 1 else 0
+        add(geo.cylinder(p['outer'], start, end), group, True)
+        add(geo.cylinder(p['hole'], start, end), group, True)
+        add(geo.support(p, 1 if i == 1 else -1, start, end), group)
+    add(geo.pin(p), 2, True)
+    # Dashed outlines show where the original mating faces will be bevelled.
+    for side, vlo, vhi, zlo, zhi in p.get('cut_guides', []):
+        group = 0 if side < 0 else 1
+        points = []
+        for y in (vlo, 0, vhi):
+            x = side * (p['axial'] / 2 + math.tan(math.radians(p['angle'] / 2)) * abs(y))
+            points.append((x, y))
+        for z in (zlo, zhi):
+            surface = ([(x, y, z) for x, y in points], [(0, 1, 2)])
+            vertices, _ = geo.world_surface(surface, p['center'], p['u'], p['v'], p['w'])
+            for start, end in zip(vertices, vertices[1:]):
+                for j in range(0, 12, 2):
+                    groups[group].extend(tuple(start[i] + (end[i] - start[i]) * t / 12 for i in range(3))
+                                         for t in (j, j + 1))
+    return groups
+
+
 def draw():
     context = bpy.context
     scene = context.scene
-    if (context.mode != 'OBJECT' or not scene or not getattr(scene, 'jc_preview', False)
-            or not context.region_data):
+    if context.mode != 'OBJECT' or not scene or not context.region_data:
+        return
+    hinge = getattr(scene, 'jc_joint_type', 'FIXED') == 'HINGE'
+    if not (scene.jc_hinge_preview if hinge else scene.jc_preview):
         return
     # Respect local view: never draw guides for objects absent from this view.
-    for obj in (scene.jc_pin, scene.jc_socket):
+    objects = (scene.jc_hinge_a, scene.jc_hinge_b) if hinge else (scene.jc_pin, scene.jc_socket)
+    for obj in objects:
         if obj is None or not obj.visible_get(view_layer=context.view_layer,
                                               viewport=context.space_data):
             return
-    from . import joint_parameters
     try:
-        params = joint_parameters(context, refresh=False)
-        pin, socket = preview_lines(params)
+        if hinge:
+            from . import hinges
+            params = hinges.parameters(context, refresh=False)
+            a, b, pin = hinge_lines(params)
+            batches = ((a, (.05, .65, 1., 1.), 2.),
+                       (b, (1., .35, .04, .9), 2.), (pin, (.2, 1., .25, 1.), 2.))
+        else:
+            if _fixed_parameters is None:
+                return
+            params = _fixed_parameters(context, refresh=False)
+            pin, socket = preview_lines(params)
+            batches = ((socket, (1., .35, .04, .9), 2.), (pin, (.05, .65, 1., 1.), 2.5))
     except (ValueError, RuntimeError, ReferenceError):
         return
     import gpu
@@ -74,8 +126,7 @@ def draw():
         gpu.state.blend_set('ALPHA')
         shader.bind()
         shader.uniform_float('viewportSize', gpu.state.viewport_get()[2:])
-        for coords, color, width in ((socket, (1., .35, .04, .9), 2.),
-                                     (pin, (.05, .65, 1., 1.), 2.5)):
+        for coords, color, width in batches:
             shader.uniform_float('lineWidth', width)
             shader.uniform_float('color', color)
             batch_for_shader(shader, 'LINES', {'pos': coords}).draw(shader)
@@ -84,8 +135,10 @@ def draw():
         gpu.state.blend_set(old_blend)
 
 
-def register():
-    global _handle
+def register(fixed_parameters=None):
+    global _handle, _fixed_parameters
+    if fixed_parameters is not None:
+        _fixed_parameters = fixed_parameters
     if _handle is None and not bpy.app.background:
         _handle = bpy.types.SpaceView3D.draw_handler_add(draw, (), 'WINDOW', 'POST_VIEW')
 
