@@ -37,6 +37,12 @@ else:
     bpy.ops.object.delete(use_global=False)
     jc.register()
     scene = bpy.context.scene
+    if HINGE:
+        # Show the new panel in the initially active Item tab for this test only.
+        bpy.utils.unregister_class(jc.JOINTCRAFT_PT_main)
+        jc.JOINTCRAFT_PT_main.bl_category = 'Item'
+        jc.JOINTCRAFT_PT_main.bl_order = -100
+        bpy.utils.register_class(jc.JOINTCRAFT_PT_main)
     bpy.ops.mesh.primitive_cube_add(size=.02)
     scene.jc_pin = bpy.context.object
     bpy.ops.mesh.primitive_cube_add(size=.02, location=(.02, 0, 0))

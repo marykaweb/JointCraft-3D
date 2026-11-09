@@ -1,4 +1,4 @@
-JointCraft 3D v0.3.0 — prototype, tested with Blender 5.2.0 LTS
+JointCraft 3D v0.3.1 — prototype, tested with Blender 5.2.0 LTS
 
 Install ZIP: Edit > Preferences > Get Extensions > menu > Install from Disk.
 Disable older separately installed JointCraft versions before installing.
@@ -57,7 +57,9 @@ Defaults: pin 3 mm, radial clearance .25 mm, each axial gap .30 mm,
 total hinge height 8 mm, wall 1.2 mm, swing each way 30 degrees.
 Advanced: outer diameter, middle knuckle width, pin shaft length (0 = automatic).
 Height includes all three knuckles and both axial gaps; head is additional.
-At the defaults outer diameter is 5.9 mm. Each knuckle must be at least wall thick.
+At the defaults outer diameter is about 5.91 mm after facet compensation.
+Each knuckle must be at least wall thick. Hole/relief polygons are expanded so
+their facets maintain circular clearance even when large parts rotate.
 
 Preview: blue Part A, orange Part B, green pin; dashed lines show bevel boundaries.
 The operator TRIMS mating faces with wedge/cylinder cuts to make room for motion,
@@ -79,3 +81,20 @@ No snap-fit, print-in-place, automatic placement or interactive rotation tool ye
 Example: two 20 x 20 x 8 mm blocks centered at (-.01,0,0) and (.01,0,0) BU with
 Unit Scale 1. Center (0,0,0), axis Z, direction 0 deg, remaining values default.
 Detailed guide: https://github.com/marykaweb/JointCraft-3D/blob/main/docs/HINGE.md
+
+0.3.1 SIZE SELECTION:
+Set final PRINT dimensions before creating joints (a default Blender cube is
+2000 mm wide at Unit Scale 1). Model dimensions (mm) shows actual part bounds.
+Use Fit Dimensions to Parts BEFORE Create (undo old joints first). It suggests
+height near 80% of shared thickness about Center and pin diameter near 37.5%
+of that height, limited by space. Change Height / thickness (%) then press Fit
+again to resize. Clearances and minimum wall are preserved; advanced outer
+diameter is recalculated, middle width and shaft length reset to automatic.
+Fit changes settings only, never source geometry or center. Preview shows the
+suggestion; Actual dimensions reports hinge height, outer diameter, pin diameter,
+total pin length including its head, knuckle widths and relative size.
+Head thickness is max(Minimum wall, 15% of pin diameter).
+For 20 x 20 x 8 mm centered blocks the suggestion is height 6.4 mm and pin 2.4 mm.
+These proportions do not determine mechanical strength. Inspect/test the result.
+Out-of-thickness knuckles are now diagnosed before construction, with the part
+name and axis. Increasing height is not a universal fix for attachment problems.

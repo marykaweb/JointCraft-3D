@@ -8,7 +8,7 @@ from . import hinge_geometry as geo
 from .utils import mm_to_bu, bounds_world, boolean_mesh
 
 
-def parameters(context, refresh=True):
+def placement(context, refresh=True):
     s = context.scene
     if refresh:
         context.view_layer.update()
@@ -39,26 +39,63 @@ def parameters(context, refresh=True):
     basis = Vector((0, 1, 0) if axis == 0 else (1, 0, 0))
     u = Matrix.Rotation(math.radians(s.jc_hinge_direction), 3, w) @ basis
     v = w.cross(u)
+    p = dict(center=center, u=u, v=v, w=w, axis=axis)
+    corners = [obj.matrix_world @ Vector(corner) for obj in (a, b) for corner in obj.bound_box]
+    p['extent_base'] = max((point - center).length for point in corners) * 2
+    p['cut_guides'] = []
+    p['local_bounds'], p['part_sizes'] = [], []
+    # Side selection is explicit: A on -u, B on +u. No guessing from origins.
+    for obj, side in ((a, -1), (b, 1)):
+        low, high = bounds_world(obj)
+        midpoint = (Vector(low) + Vector(high)) * .5
+        if side * (midpoint - center).dot(u) <= mm_to_bu(context, s.jc_hinge_wall_mm) * .1:
+            raise ValueError('Check center/direction: Part A must be on -direction, Part B on +direction')
+        local_corners = [obj.matrix_world @ Vector(corner) - center for corner in obj.bound_box]
+        p['local_bounds'].append(tuple((min(c.dot(basis) for c in local_corners),
+                                       max(c.dot(basis) for c in local_corners))
+                                      for basis in (u, v, w)))
+        p['part_sizes'].append([high[i] - low[i] for i in range(3)])
+        p['cut_guides'].append((side, min(c.dot(v) for c in local_corners), max(c.dot(v) for c in local_corners),
+                                min(c.dot(w) for c in local_corners), max(c.dot(w) for c in local_corners)))
+    return p
+
+
+def parameters(context, refresh=True):
+    s = context.scene
+    frame = placement(context, refresh)
     bu = lambda val: mm_to_bu(context, val)
     p = geo.dimensions(bu(s.jc_hinge_pin_mm), bu(s.jc_hinge_radial_mm),
                        bu(s.jc_hinge_axial_mm), bu(s.jc_hinge_height_mm),
                        bu(s.jc_hinge_wall_mm), bu(s.jc_hinge_outer_mm),
                        bu(s.jc_hinge_middle_mm), bu(s.jc_hinge_pin_length_mm),
                        s.jc_hinge_angle)
-    p.update(center=center, u=u, v=v, w=w, axis=axis)
-    corners = [obj.matrix_world @ Vector(corner) for obj in (a, b) for corner in obj.bound_box]
-    p['extent'] = max((point - center).length for point in corners) * 2 + p['reach'] * 4
-    p['cut_guides'] = []
-    # Side selection is explicit: A on -u, B on +u. No guessing from origins.
-    for obj, side in ((a, -1), (b, 1)):
-        low, high = bounds_world(obj)
-        midpoint = (Vector(low) + Vector(high)) * .5
-        if side * (midpoint - center).dot(u) <= p['wall'] * .1:
-            raise ValueError('Check center/direction: Part A must be on -direction, Part B on +direction')
-        local_corners = [obj.matrix_world @ Vector(corner) - center for corner in obj.bound_box]
-        p['cut_guides'].append((side, min(c.dot(v) for c in local_corners), max(c.dot(v) for c in local_corners),
-                                min(c.dot(w) for c in local_corners), max(c.dot(w) for c in local_corners)))
+    p.update(frame)
+    p['extent'] = p['extent_base'] + p['reach'] * 4
+    for index, (obj, bounds) in enumerate(zip((s.jc_hinge_a, s.jc_hinge_b), p['local_bounds'])):
+        bands = (p['intervals'][0], p['intervals'][2]) if index == 0 else (p['intervals'][1],)
+        for start, end in bands:
+            if min(end, bounds[2][1]) <= max(start, bounds[2][0]):
+                raise ValueError("%s '%s': knuckle is outside the part thickness along %s. "
+                                 "Move Center into the thickness or reduce hinge height (current %.2f mm)." %
+                                 ('Part A' if index == 0 else 'Part B', obj.name,
+                                  s.jc_hinge_axis, s.jc_hinge_height_mm))
     return p
+
+
+def fitted_dimensions(context):
+    s = context.scene
+    p = placement(context)
+    bounds = p['local_bounds']
+    available = 2 * min(-max(b[2][0] for b in bounds), min(b[2][1] for b in bounds))
+    depth = min(-bounds[0][0][0], bounds[1][0][1])
+    half_width = min(min(-b[1][0], b[1][1]) for b in bounds)
+    bu = lambda val: mm_to_bu(context, val)
+    suggestion = geo.fit_dimensions(available, depth, half_width,
+                                    bu(s.jc_hinge_wall_mm), bu(s.jc_hinge_radial_mm),
+                                    bu(s.jc_hinge_axial_mm), s.jc_hinge_fit_percent)
+    if suggestion['pin_diameter'] < bu(.1):
+        raise ValueError('Suggested pin is smaller than 0.1 mm; set model dimensions first')
+    return {key: value / bu(1) for key, value in suggestion.items()}
 
 
 def mesh_info(mesh, matrix=None, require_connected=True):
@@ -185,16 +222,21 @@ def build(context, p):
         parts = [st.object(obj.data.copy(), obj.matrix_world.copy()) for obj in originals]
         for obj in parts:
             mesh_info(obj.data, obj.matrix_world)
-        clearance = st.surface(p, geo.cylinder(p['outer'] + p['axial'], -p['extent'], p['extent']))
-        bore = st.surface(p, geo.cylinder(p['hole'], -p['extent'], p['extent']))
+        clearance = st.surface(p, geo.cylinder(p['relief_radius'], -p['extent'], p['extent']))
+        bore = st.surface(p, geo.cylinder(p['hole_cut_radius'], -p['extent'], p['extent']))
         for index, (part, side) in enumerate(zip(parts, (-1, 1))):
             st.boolean(part, st.surface(p, geo.keeper(p, side, p['extent'])), 'INTERSECT')
             st.boolean(part, clearance, 'DIFFERENCE')
             bands = (p['intervals'][0], p['intervals'][2]) if index == 0 else (p['intervals'][1],)
             for start, end in bands:
                 support = st.surface(p, geo.support(p, side, start, end))
-                if st.overlap(part, support) < p['wall'] ** 3 * .1:
-                    raise ValueError('Insufficient attachment material: move center or increase hinge height')
+                overlap = st.overlap(part, support)
+                if overlap < p['wall'] ** 3 * .1:
+                    raise ValueError("%s '%s': insufficient attachment material for knuckle %.2f..%.2f mm along %s. "
+                                     "Check Center and attachment direction; support reach is %.2f mm." %
+                                     ('Part A' if index == 0 else 'Part B', originals[index].name,
+                                      start / mm_to_bu(context, 1), end / mm_to_bu(context, 1),
+                                      s.jc_hinge_axis, p['reach'] / mm_to_bu(context, 1)))
                 st.boolean(part, support, 'UNION')
                 st.boolean(part, st.surface(p, geo.cylinder(p['outer'], start, end)), 'UNION')
             st.boolean(part, bore, 'DIFFERENCE')
@@ -214,6 +256,8 @@ def build(context, p):
             parts[1].matrix_world = rotation @ matrix
             if st.overlap(parts[0], parts[1]) > threshold:
                 raise ValueError('Parts collide near %d degrees; move center or reduce rotation range' % degrees)
+            if st.overlap(parts[1], pin) > threshold:
+                raise ValueError('Middle knuckle intersects pin near %d degrees' % degrees)
         parts[1].matrix_world = matrix
         for source, result in zip(originals, parts):
             result.data.name = source.data.name + ' Hinge'
@@ -274,17 +318,59 @@ class JOINTCRAFT_OT_hinge_cursor(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class JOINTCRAFT_OT_hinge_fit(bpy.types.Operator):
+    bl_idname = 'jointcraft.hinge_fit'
+    bl_label = 'Fit Dimensions to Parts'
+    bl_description = 'Suggest proportions from part thickness around Center; keeps clearances and wall, resets advanced dimensions. Use before creating the hinge'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        s = context.scene
+        old = tuple(getattr(s, name) for name in FIT_PROPERTIES)
+        try:
+            fit = fitted_dimensions(context)
+            s.jc_hinge_pin_mm = fit['pin_diameter']
+            s.jc_hinge_height_mm = fit['height']
+            s.jc_hinge_outer_mm = fit['outer_diameter']
+            s.jc_hinge_middle_mm = 0
+            s.jc_hinge_pin_length_mm = 0
+            parameters(context)
+            s.jc_hinge_preview = True
+            self.report({'INFO'}, 'Suggested height %.2f mm, pin diameter %.2f mm; inspect live preview before creating' %
+                        (s.jc_hinge_height_mm, s.jc_hinge_pin_mm))
+            return {'FINISHED'}
+        except Exception as exc:
+            for name, value in zip(FIT_PROPERTIES, old):
+                setattr(s, name, value)
+            self.report({'ERROR'}, 'JointCraft sizing: ' + str(exc))
+            return {'CANCELLED'}
+
+
 def draw_panel(layout, context):
     s = context.scene
     layout.label(text='Placement: Manual (world coordinates)')
     for prop in ('jc_hinge_a', 'jc_hinge_b', 'jc_hinge_center_object'):
         layout.prop(s, prop)
+    model_size = layout.box()
+    model_size.label(text='Model dimensions (mm)')
+    for label, obj in (('Part A', s.jc_hinge_a), ('Part B', s.jc_hinge_b)):
+        if obj is not None and obj.type == 'MESH':
+            low, high = bounds_world(obj)
+            size = [(high[i] - low[i]) / mm_to_bu(context, 1) for i in range(3)]
+            model_size.label(text='%s: %.1f x %.1f x %.1f' % (label, *size))
+            if max(size) > 500:
+                model_size.label(text='Large model: check final print size', icon='INFO')
     if s.jc_hinge_center_object is None:
         layout.prop(s, 'jc_hinge_center')
         layout.operator('jointcraft.hinge_cursor', icon='PIVOT_CURSOR')
     layout.prop(s, 'jc_hinge_axis')
     layout.prop(s, 'jc_hinge_direction')
     layout.label(text='A: -direction / B: +direction')
+    sizing = layout.box()
+    sizing.label(text='Size relative to parts')
+    sizing.prop(s, 'jc_hinge_fit_percent')
+    sizing.operator('jointcraft.hinge_fit', icon='FULLSCREEN_ENTER')
+    sizing.label(text='Use before Create; keeps print gaps')
     for prop in ('jc_hinge_pin_mm', 'jc_hinge_radial_mm', 'jc_hinge_axial_mm',
                  'jc_hinge_height_mm', 'jc_hinge_wall_mm', 'jc_hinge_angle'):
         layout.prop(s, prop)
@@ -300,7 +386,19 @@ def draw_panel(layout, context):
     valid = True
     try:
         p = parameters(context, refresh=False)
-        layout.label(text='Outer diameter: %.2f mm' % (2 * p['outer'] / mm_to_bu(context, 1)))
+        summary = layout.box()
+        summary.label(text='Actual dimensions (mm)', icon='DRIVER_DISTANCE')
+        unit = mm_to_bu(context, 1)
+        summary.label(text='Hinge height: %.2f' % (p['height'] / unit))
+        summary.label(text='Outer diameter: %.2f' % (2 * p['outer'] / unit))
+        summary.label(text='Pin diameter: %.2f' % (2 * p['pin_radius'] / unit))
+        summary.label(text='Pin total length: %.2f' % ((p['shaft_length'] + p['head_thickness']) / unit))
+        summary.label(text='Knuckles A/B/A: %.2f / %.2f / %.2f' %
+                           (p['ear'] / unit, p['middle'] / unit, p['ear'] / unit))
+        thickness = min(b[2][1] - b[2][0] for b in p['local_bounds'])
+        summary.label(text='Height / part thickness: %.1f%%' % (100 * p['height'] / thickness))
+        if p['height'] < thickness * .05:
+            summary.label(text='Very small: try Fit Dimensions', icon='INFO')
     except (ValueError, RuntimeError, ReferenceError) as exc:
         import textwrap
         valid = False
@@ -314,13 +412,15 @@ def draw_panel(layout, context):
     layout.label(text='Glue pin tip to Part A only', icon='INFO')
 
 
-CLASSES = (JOINTCRAFT_OT_hinge, JOINTCRAFT_OT_hinge_cursor)
+FIT_PROPERTIES = ('jc_hinge_pin_mm', 'jc_hinge_height_mm', 'jc_hinge_outer_mm',
+                  'jc_hinge_middle_mm', 'jc_hinge_pin_length_mm')
+CLASSES = (JOINTCRAFT_OT_hinge, JOINTCRAFT_OT_hinge_cursor, JOINTCRAFT_OT_hinge_fit)
 PROPERTIES = ('jc_joint_type', 'jc_hinge_a', 'jc_hinge_b', 'jc_hinge_axis',
               'jc_hinge_center_object', 'jc_hinge_center', 'jc_hinge_direction',
               'jc_hinge_preview', 'jc_hinge_advanced', 'jc_hinge_pin_mm',
               'jc_hinge_radial_mm', 'jc_hinge_axial_mm', 'jc_hinge_height_mm',
               'jc_hinge_wall_mm', 'jc_hinge_outer_mm', 'jc_hinge_middle_mm',
-              'jc_hinge_pin_length_mm', 'jc_hinge_angle')
+              'jc_hinge_pin_length_mm', 'jc_hinge_angle', 'jc_hinge_fit_percent')
 
 
 def register(redraw, mesh_in_scene):
@@ -337,6 +437,8 @@ def register(redraw, mesh_in_scene):
     scene.jc_hinge_angle = FloatProperty(name='Swing each way (deg)', default=30, min=5, max=60, precision=0, update=redraw)
     scene.jc_hinge_preview = BoolProperty(name='Show live preview', default=True, update=redraw)
     scene.jc_hinge_advanced = BoolProperty(name='Advanced dimensions', default=False, update=redraw)
+    scene.jc_hinge_fit_percent = FloatProperty(name='Height / thickness (%)', default=80,
+                                              min=10, max=100, precision=0, step=1, update=redraw)
     for name, label, default, minimum in (
             ('jc_hinge_pin_mm', 'Pin diameter (mm)', 3, .1),
             ('jc_hinge_radial_mm', 'Radial clearance (mm)', .25, .01),

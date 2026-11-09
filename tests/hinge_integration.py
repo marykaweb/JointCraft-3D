@@ -63,7 +63,7 @@ class HingeTests(unittest.TestCase):
                         inverse @ origin, inverse.to_3x3() @ p['u'])
                     self.assertTrue(hit)
                     self.assertAlmostEqual((obj.matrix_world @ point - origin).length,
-                                           p['hole'], delta=1e-6)
+                                           p['hole_cut_radius'], delta=1e-6)
                 self.assertEqual([a.matrix_world, b.matrix_world], originals)
                 stage = h.Stage(bpy.context)
                 try:
@@ -219,6 +219,58 @@ class HingeTests(unittest.TestCase):
                     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
                 h.build(bpy.context, h.parameters(bpy.context))
                 self.assertEqual(len(bpy.data.objects), 3)
+
+    def test_fit_sizes_and_preserves_clearances_in_different_units(self):
+        for scale in (1, .001):
+            with self.subTest(scale=scale):
+                self.setUp()
+                a, b = self.parts(scale=scale)
+                meshes = (a.data, b.data)
+                settings = (self.scene.jc_hinge_radial_mm, self.scene.jc_hinge_axial_mm,
+                            self.scene.jc_hinge_wall_mm)
+                self.assertEqual(bpy.ops.jointcraft.hinge_fit(), {'FINISHED'})
+                self.assertAlmostEqual(self.scene.jc_hinge_height_mm, 6.4, places=4)
+                self.assertAlmostEqual(self.scene.jc_hinge_pin_mm, 2.4, places=4)
+                self.assertEqual(settings, (self.scene.jc_hinge_radial_mm,
+                                           self.scene.jc_hinge_axial_mm, self.scene.jc_hinge_wall_mm))
+                self.assertEqual((a.data, b.data), meshes)
+                self.assertEqual(len(bpy.data.objects), 2)
+                h.build(bpy.context, h.parameters(bpy.context))
+
+    def test_fit_large_standard_cubes(self):
+        a, b = self.parts()
+        for obj in (a, b):
+            obj.location *= 100
+            obj.scale = (100, 100, 100)
+        self.assertEqual(bpy.ops.jointcraft.hinge_fit(), {'FINISHED'})
+        self.assertAlmostEqual(self.scene.jc_hinge_height_mm, 1600, places=3)
+        self.assertAlmostEqual(self.scene.jc_hinge_pin_mm, 600, places=3)
+        h.build(bpy.context, h.parameters(bpy.context))
+        for obj in bpy.data.objects:
+            h.mesh_info(obj.data, obj.matrix_world)
+        pin = next(obj for obj in bpy.data.objects if obj.get('jointcraft_role') == 'hinge_pin')
+        original = b.matrix_world.copy()
+        stage = h.Stage(bpy.context)
+        try:
+            for angle in (-30, -15, 15, 30):
+                b.matrix_world = Matrix.Rotation(math.radians(angle), 4, 'Z') @ original
+                self.assertLess(stage.overlap(b, pin), 1e-13)
+        finally:
+            b.matrix_world = original
+            stage.close()
+
+    def test_fit_failure_preserves_fields_and_explains_axial_mismatch(self):
+        a, b = self.parts()
+        for obj in (a, b):
+            obj.scale.z = .2
+        self.scene.jc_hinge_height_mm = 12
+        with self.assertRaisesRegex(ValueError, 'outside the part thickness'):
+            h.parameters(bpy.context)
+        old = tuple(getattr(self.scene, name) for name in h.FIT_PROPERTIES)
+        with self.assertRaisesRegex(RuntimeError, 'too thin'):
+            bpy.ops.jointcraft.hinge_fit()
+        self.assertEqual(tuple(getattr(self.scene, name) for name in h.FIT_PROPERTIES), old)
+        self.assertEqual(len(bpy.data.objects), 2)
 
 
 jc.register()

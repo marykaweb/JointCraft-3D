@@ -1,7 +1,7 @@
 bl_info = {
     "name": "JointCraft 3D",
     "author": "JointCraft 3D",
-    "version": (0, 3, 0),
+    "version": (0, 3, 1),
     "blender": (5, 2, 0),
     "location": "View3D > Sidebar > JointCraft",
     "description": "Create fixed pin/socket connectors and articulated three-knuckle hinges",
@@ -178,7 +178,7 @@ class JOINTCRAFT_OT_create(bpy.types.Operator):
 
 
 class JOINTCRAFT_PT_main(bpy.types.Panel):
-    bl_label = "JointCraft 3D v0.3.0"
+    bl_label = "JointCraft 3D v0.3.1"
     bl_idname = "JOINTCRAFT_PT_main"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'

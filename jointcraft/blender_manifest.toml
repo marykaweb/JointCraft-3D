@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "jointcraft_3d"
-version = "0.3.0"
+version = "0.3.1"
 name = "JointCraft 3D"
 tagline = "Fixed connectors and articulated hinges for 3D-print parts"
 maintainer = "JointCraft 3D"

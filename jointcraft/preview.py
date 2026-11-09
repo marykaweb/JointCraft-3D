@@ -66,7 +66,7 @@ def hinge_lines(p):
     for i, (start, end) in enumerate(p['intervals']):
         group = 1 if i == 1 else 0
         add(geo.cylinder(p['outer'], start, end), group, True)
-        add(geo.cylinder(p['hole'], start, end), group, True)
+        add(geo.cylinder(p['hole_cut_radius'], start, end), group, True)
         add(geo.support(p, 1 if i == 1 else -1, start, end), group)
     add(geo.pin(p), 2, True)
     # Dashed outlines show where the original mating faces will be bevelled.
